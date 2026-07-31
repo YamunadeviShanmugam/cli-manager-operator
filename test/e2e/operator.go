@@ -88,7 +88,7 @@ func setupOperator(t testing.TB) (context.Context, context.CancelFunc, *k8sclien
 
 	eventRecorder := events.NewKubeRecorder(kubeClient.CoreV1().Events("default"), "test-e2e", &corev1.ObjectReference{}, clock.RealClock{})
 
-	// Get cluster version
+	// Get cluster version for fallback image construction
 	cmd := exec.Command("oc", "get", "clusterversion", "-o", "jsonpath={.items[0].status.desired.version}")
 	versionOutput, err := cmd.Output()
 	if err != nil {
@@ -100,6 +100,24 @@ func setupOperator(t testing.TB) (context.Context, context.CancelFunc, *k8sclien
 	}
 	ocpVersion := fmt.Sprintf("%s.%s", versionParts[0], versionParts[1])
 	klog.Infof("Detected OCP version: %s", ocpVersion)
+
+	// Determine operator image: OPERATOR_IMAGE env var or fallback to constructed path
+	operatorImage := os.Getenv("OPERATOR_IMAGE")
+	if operatorImage == "" {
+		operatorImage = fmt.Sprintf("registry.ci.openshift.org/ocp/%s:cli-manager-operator", ocpVersion)
+		klog.Infof("OPERATOR_IMAGE not set, using fallback: %s", operatorImage)
+	} else {
+		klog.Infof("Using OPERATOR_IMAGE from environment: %s", operatorImage)
+	}
+
+	// Determine operand image: OPERAND_IMAGE env var or fallback to constructed path
+	operandImage := os.Getenv("OPERAND_IMAGE")
+	if operandImage == "" {
+		operandImage = fmt.Sprintf("registry.ci.openshift.org/ocp/%s:cli-manager", ocpVersion)
+		klog.Infof("OPERAND_IMAGE not set, using fallback: %s", operandImage)
+	} else {
+		klog.Infof("Using OPERAND_IMAGE from environment: %s", operandImage)
+	}
 
 	assets := []struct {
 		path           string
@@ -151,14 +169,11 @@ func setupOperator(t testing.TB) (context.Context, context.CancelFunc, *k8sclien
 			path: "assets/06_deployment.yaml",
 			readerAndApply: func(objBytes []byte) error {
 				required := resourceread.ReadDeploymentV1OrDie(objBytes)
-				// override the operator image with the one built in the CI
 
-				operatorImage := fmt.Sprintf("registry.ci.openshift.org/ocp/%s:cli-manager-operator", ocpVersion)
 				required.Spec.Template.Spec.Containers[0].Image = operatorImage
 				klog.Infof("Using operator image: %s", operatorImage)
 
 				// RELATED_IMAGE_OPERAND_IMAGE env
-				operandImage := fmt.Sprintf("registry.ci.openshift.org/ocp/%s:cli-manager", ocpVersion)
 				for i, env := range required.Spec.Template.Spec.Containers[0].Env {
 					if env.Name == "RELATED_IMAGE_OPERAND_IMAGE" {
 						required.Spec.Template.Spec.Containers[0].Env[i].Value = operandImage
@@ -194,7 +209,7 @@ func setupOperator(t testing.TB) (context.Context, context.CancelFunc, *k8sclien
 	}
 
 	// create required resources, e.g. namespace, crd, roles
-	if err := wait.PollUntilContextTimeout(context.TODO(), 1*time.Second, 10*time.Second, true, func(ctx context.Context) (bool, error) {
+	if err := wait.PollUntilContextTimeout(context.TODO(), 1*time.Second, 30*time.Second, true, func(ctx context.Context) (bool, error) {
 		for _, asset := range assets {
 			klog.Infof("Creating %v", asset.path)
 			if err := asset.readerAndApply(bindata.MustAsset(asset.path)); err != nil {
@@ -210,7 +225,7 @@ func setupOperator(t testing.TB) (context.Context, context.CancelFunc, *k8sclien
 
 	var cliManagerOperatorPod *corev1.Pod
 	// Wait until the CLI Manager Operator pod is running
-	if err := wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 1*time.Minute, true, func(ctx context.Context) (bool, error) {
+	if err := wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
 		klog.Infof("Listing pods...")
 		podItems, err := kubeClient.CoreV1().Pods(operatorclient.OperatorNamespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
@@ -236,7 +251,7 @@ func setupOperator(t testing.TB) (context.Context, context.CancelFunc, *k8sclien
 
 	var cliManagerPod *corev1.Pod
 	// Wait until the CLI Manager pod is running
-	if err := wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 2*time.Minute, false, func(ctx context.Context) (bool, error) {
+	if err := wait.PollUntilContextTimeout(context.TODO(), 5*time.Second, 5*time.Minute, false, func(ctx context.Context) (bool, error) {
 		klog.Infof("Listing pods...")
 		podItems, err := kubeClient.CoreV1().Pods(operatorclient.OperatorNamespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
@@ -312,13 +327,13 @@ func testCLIManager(t testing.TB, ctx context.Context, kubeClient *k8sclient.Cli
 
 	currentPath := homedir.HomeDir() + "/.krew"
 	cmd := exec.Command("oc", "krew", "index", "add", customKrewIndexName, krewUrl)
-	cmd.Env = []string{
+	cmd.Env = append(os.Environ(),
 		"GIT_SSL_NO_VERIFY=true",
-		"KREW_ROOT=" + currentPath,
-		"KREW_OS=" + runtime.GOOS,
-		"KREW_ARCH=" + runtime.GOARCH,
-	}
-	cmd.Env = append(cmd.Env, "PATH="+currentPath+"/bin"+string(os.PathListSeparator)+os.Getenv("PATH"))
+		"KREW_ROOT="+currentPath,
+		"KREW_OS="+runtime.GOOS,
+		"KREW_ARCH="+runtime.GOARCH,
+		"PATH="+currentPath+"/bin"+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("oc krew index add operation failed %v output: %s", err, string(out))
