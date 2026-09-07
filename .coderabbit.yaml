@@ -1,0 +1,49 @@
+inheritance: true
+language: en-US
+reviews:
+  profile: assertive
+  high_level_summary: true
+  review_status: true
+  commit_status: true
+  collapse_walkthrough: false
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  poem: false
+  suggested_labels: true
+  path_filters:
+  - "!**/zz_generated.crd-manifests/*"
+  - "!**/zz_generated.featuregated-crd-manifests/**"
+  - "!**/zz_generated.*.go"
+  - "!openapi/**"
+  - "!**/vendor/**"
+  - "!vendor/**"
+  - "!**/bindata.go"
+  - "!**/v1alpha1/zz_generated*"
+  - "!**/v1/zz_generated*"
+  tools:
+    golangci-lint:
+      enabled: true
+      args: "--timeout=5m --max-issues-per-linter=0"
+    gofmt:
+      enabled: true
+    govet:
+      enabled: true
+    staticcheck:
+      enabled: true
+  skip_annotations:
+  - "@coderabbit-ignore"
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+    - AGENTS.md
+    - README.md
+    - CONTRIBUTING.md
+  learnings:
+    scope: local
+    enabled: true
+chat:
+  auto_reply: true
+  auto_reply_on_comment: true
+
